@@ -20,10 +20,6 @@ class _HistoryPageState extends State<HistoryPage> {
   @override
   void initState() {
     super.initState();
-    _refresh();
-  }
-
-  void _refresh() {
     _historyList = DatabaseHelper.instance.getHistory();
   }
 
@@ -41,133 +37,171 @@ class _HistoryPageState extends State<HistoryPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Riwayat Penggunaan")),
-      body: FutureBuilder<List<Map<String, dynamic>>>(
-        future: _historyList,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
+      backgroundColor: const Color(0xffF4F6FA),
+      body: SafeArea(
+        child: FutureBuilder<List<Map<String, dynamic>>>(
+          future: _historyList,
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
 
-          if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text("Belum ada riwayat data."));
-          }
+            final data = snapshot.data!;
+            data.sort((a, b) =>
+                DateTime.parse(a['date']).compareTo(DateTime.parse(b['date'])));
 
-          final data = snapshot.data!;
+            // ===== Hitung total bulan ini =====
+            final now = DateTime.now();
+            double totalMonthMb = 0;
 
-          // Urutkan tanggal
-          data.sort((a, b) =>
-              DateTime.parse(a['date']).compareTo(DateTime.parse(b['date'])));
+            for (var item in data) {
+              final date = DateTime.parse(item['date']);
+              if (date.month == now.month && date.year == now.year) {
+                final totalBytes =
+                    (item['wifi'] as int) + (item['mobile'] as int);
+                totalMonthMb += totalBytes / (1024 * 1024);
+              }
+            }
 
-          // ================= TOTAL BULAN INI =================
-          final now = DateTime.now();
-          double totalMonthMb = 0;
+            // ===== Chart 7 hari =====
+            final last7Days =
+                data.reversed.take(7).toList().reversed.toList();
 
-          for (var item in data) {
-            final date = DateTime.parse(item['date']);
-            if (date.month == now.month && date.year == now.year) {
+            final chartData = last7Days.map((item) {
               final totalBytes =
                   (item['wifi'] as int) + (item['mobile'] as int);
-              totalMonthMb += totalBytes / (1024 * 1024);
-            }
-          }
+              final mb = totalBytes / (1024 * 1024);
 
-          // ================= DATA 7 HARI TERAKHIR =================
-          final last7Days =
-              data.reversed.take(7).toList().reversed.toList();
+              final date = DateTime.parse(item['date']);
+              final dayName =
+                  ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"]
+                      [date.weekday - 1];
 
-          final chartData = last7Days.map((item) {
-            final totalBytes =
-                (item['wifi'] as int) + (item['mobile'] as int);
-            final mb = totalBytes / (1024 * 1024);
+              return DataUsage(dayName, mb);
+            }).toList();
 
-            final date = DateTime.parse(item['date']);
-            final dayName =
-                ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"]
-                    [date.weekday - 1];
-
-            return DataUsage(dayName, mb);
-          }).toList();
-
-          return Column(
-            children: [
-              const SizedBox(height: 16),
-
-              // ================= DATA LIMIT CARD =================
-              FutureBuilder<double>(
-                future: _getLimit(),
-                builder: (context, limitSnap) {
-                  if (!limitSnap.hasData) return const SizedBox();
-
-                  return GestureDetector(
-                    onTap: () async {
-                      await Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => const LimitPage()),
-                      );
-                      setState(() {
-                        _refresh();
-                      });
-                    },
-                    child: DataLimitCard(
-                      usedMb: totalMonthMb,
-                      limitMb: limitSnap.data!,
+            return SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ===== HEADER =====
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: const BoxDecoration(
+                      color: Colors.blue,
+                      borderRadius: BorderRadius.vertical(
+                          bottom: Radius.circular(30)),
                     ),
-                  );
-                },
-              ),
+                    child: const Text(
+                      "Monitoring Kuota Internet",
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ),
 
-              const SizedBox(height: 16),
+                  const SizedBox(height: 20),
 
-              // ================= CHART =================
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: DataUsageChart(data: chartData),
-              ),
-
-              const SizedBox(height: 20),
-
-              // ================= APP USAGE LIST =================
-              const Text(
-                "Aplikasi Paling Boros Hari Ini",
-                style: TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 10),
-              const AppUsageList(),
-
-              const SizedBox(height: 16),
-
-              // ================= LIST HISTORY =================
-              Expanded(
-                child: ListView.builder(
-                  itemCount: data.length,
-                  itemBuilder: (context, index) {
-                    final item = data[index];
-                    return Card(
-                      margin: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 5),
-                      child: ListTile(
-                        leading: const Icon(Icons.history,
-                            color: Colors.blue),
-                        title: Text(item['date']),
-                        subtitle: Row(
-                          mainAxisAlignment:
-                              MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text("WiFi: ${_formatBytes(item['wifi'])}"),
-                            Text("Mobile: ${_formatBytes(item['mobile'])}"),
-                          ],
+                  // ===== LIMIT CARD =====
+                  FutureBuilder<double>(
+                    future: _getLimit(),
+                    builder: (context, limitSnap) {
+                      if (!limitSnap.hasData) return const SizedBox();
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: GestureDetector(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const LimitPage()),
+                            );
+                          },
+                          child: DataLimitCard(
+                            usedMb: totalMonthMb,
+                            limitMb: limitSnap.data!,
+                          ),
                         ),
+                      );
+                    },
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // ===== CHART CARD =====
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Card(
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20)),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: DataUsageChart(data: chartData),
                       ),
-                    );
-                  },
-                ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // ===== TOP APPS =====
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 20),
+                    child: Text(
+                      "Top Aplikasi Paling Boros",
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    child: AppUsageList(),
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // ===== HISTORY TITLE =====
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 20),
+                    child: Text(
+                      "Riwayat Harian",
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+
+                  const SizedBox(height: 10),
+
+                  // ===== HISTORY LIST =====
+                  ListView.builder(
+                    itemCount: data.length,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemBuilder: (context, index) {
+                      final item = data[index];
+                      return Card(
+                        margin: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 6),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(15)),
+                        child: ListTile(
+                          leading: const Icon(Icons.calendar_today,
+                              color: Colors.blue),
+                          title: Text(item['date']),
+                          subtitle: Text(
+                              "WiFi: ${_formatBytes(item['wifi'])} | Mobile: ${_formatBytes(item['mobile'])}"),
+                        ),
+                      );
+                    },
+                  ),
+
+                  const SizedBox(height: 30),
+                ],
               ),
-            ],
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
