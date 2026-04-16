@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:limit_kuota/src/core/data/database_helper.dart';
 import 'models/data_usage_model.dart';
 import 'widgets/data_usage_chart.dart';
+import 'widgets/data_limit_card.dart';
+import 'limit_page.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class HistoryPage extends StatefulWidget {
   const HistoryPage({super.key});
@@ -19,12 +22,14 @@ class _HistoryPageState extends State<HistoryPage> {
     _historyList = DatabaseHelper.instance.getHistory();
   }
 
+  Future<double> _getLimit() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble('monthly_limit_mb') ?? 5000;
+  }
+
   String _formatBytes(int bytes) {
-    if (bytes <= 0) return "0.00 MB";
     double mb = bytes / (1024 * 1024);
-    if (mb > 1024) {
-      return "${(mb / 1024).toStringAsFixed(2)} GB";
-    }
+    if (mb > 1024) return "${(mb / 1024).toStringAsFixed(2)} GB";
     return "${mb.toStringAsFixed(2)} MB";
   }
 
@@ -35,30 +40,25 @@ class _HistoryPageState extends State<HistoryPage> {
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: _historyList,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
-          }
-
-          if (snapshot.hasError) {
-            return Center(child: Text("Error: ${snapshot.error}"));
-          }
-
-          if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text("Belum ada riwayat data."));
           }
 
           final data = snapshot.data!;
 
-          // WAJIB diurutkan berdasarkan tanggal
           data.sort((a, b) =>
-              DateTime.parse(a['date'])
-                  .compareTo(DateTime.parse(b['date'])));
+              DateTime.parse(a['date']).compareTo(DateTime.parse(b['date'])));
 
-          // Ambil 7 hari terakhir yang BENAR
+          double totalMonthMb = 0;
+          for (var item in data) {
+            final totalBytes =
+                (item['wifi'] as int) + (item['mobile'] as int);
+            totalMonthMb += totalBytes / (1024 * 1024);
+          }
+
           final last7Days =
               data.reversed.take(7).toList().reversed.toList();
 
-          // Siapkan data untuk chart
           final chartData = last7Days.map((item) {
             final totalBytes =
                 (item['wifi'] as int) + (item['mobile'] as int);
@@ -76,6 +76,30 @@ class _HistoryPageState extends State<HistoryPage> {
             children: [
               const SizedBox(height: 16),
 
+              FutureBuilder<double>(
+                future: _getLimit(),
+                builder: (context, limitSnap) {
+                  if (!limitSnap.hasData) return const SizedBox();
+
+                  return GestureDetector(
+                    onTap: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const LimitPage()),
+                      );
+                      setState(() {});
+                    },
+                    child: DataLimitCard(
+                      usedMb: totalMonthMb,
+                      limitMb: limitSnap.data!,
+                    ),
+                  );
+                },
+              ),
+
+              const SizedBox(height: 16),
+
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: DataUsageChart(data: chartData),
@@ -88,28 +112,19 @@ class _HistoryPageState extends State<HistoryPage> {
                   itemCount: data.length,
                   itemBuilder: (context, index) {
                     final item = data[index];
-
                     return Card(
                       margin: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 5),
                       child: ListTile(
-                        leading: const Icon(
-                          Icons.history,
-                          color: Colors.blue,
-                        ),
-                        title: Text(
-                          item['date'],
-                          style: const TextStyle(
-                              fontWeight: FontWeight.bold),
-                        ),
+                        leading: const Icon(Icons.history,
+                            color: Colors.blue),
+                        title: Text(item['date']),
                         subtitle: Row(
                           mainAxisAlignment:
                               MainAxisAlignment.spaceBetween,
                           children: [
-                            Text(
-                                "WiFi: ${_formatBytes(item['wifi'])}"),
-                            Text(
-                                "Mobile: ${_formatBytes(item['mobile'])}"),
+                            Text("WiFi: ${_formatBytes(item['wifi'])}"),
+                            Text("Mobile: ${_formatBytes(item['mobile'])}"),
                           ],
                         ),
                       ),
