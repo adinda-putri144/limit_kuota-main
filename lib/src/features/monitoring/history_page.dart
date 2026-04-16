@@ -3,6 +3,7 @@ import 'package:limit_kuota/src/core/data/database_helper.dart';
 import 'models/data_usage_model.dart';
 import 'widgets/data_usage_chart.dart';
 import 'widgets/data_limit_card.dart';
+import 'widgets/app_usage_list.dart';
 import 'limit_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -19,6 +20,10 @@ class _HistoryPageState extends State<HistoryPage> {
   @override
   void initState() {
     super.initState();
+    _refresh();
+  }
+
+  void _refresh() {
     _historyList = DatabaseHelper.instance.getHistory();
   }
 
@@ -40,22 +45,34 @@ class _HistoryPageState extends State<HistoryPage> {
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: _historyList,
         builder: (context, snapshot) {
-          if (!snapshot.hasData) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
+          }
+
+          if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return const Center(child: Text("Belum ada riwayat data."));
           }
 
           final data = snapshot.data!;
 
+          // Urutkan tanggal
           data.sort((a, b) =>
               DateTime.parse(a['date']).compareTo(DateTime.parse(b['date'])));
 
+          // ================= TOTAL BULAN INI =================
+          final now = DateTime.now();
           double totalMonthMb = 0;
+
           for (var item in data) {
-            final totalBytes =
-                (item['wifi'] as int) + (item['mobile'] as int);
-            totalMonthMb += totalBytes / (1024 * 1024);
+            final date = DateTime.parse(item['date']);
+            if (date.month == now.month && date.year == now.year) {
+              final totalBytes =
+                  (item['wifi'] as int) + (item['mobile'] as int);
+              totalMonthMb += totalBytes / (1024 * 1024);
+            }
           }
 
+          // ================= DATA 7 HARI TERAKHIR =================
           final last7Days =
               data.reversed.take(7).toList().reversed.toList();
 
@@ -67,7 +84,7 @@ class _HistoryPageState extends State<HistoryPage> {
             final date = DateTime.parse(item['date']);
             final dayName =
                 ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"]
-                    [date.weekday % 7];
+                    [date.weekday - 1];
 
             return DataUsage(dayName, mb);
           }).toList();
@@ -76,6 +93,7 @@ class _HistoryPageState extends State<HistoryPage> {
             children: [
               const SizedBox(height: 16),
 
+              // ================= DATA LIMIT CARD =================
               FutureBuilder<double>(
                 future: _getLimit(),
                 builder: (context, limitSnap) {
@@ -88,7 +106,9 @@ class _HistoryPageState extends State<HistoryPage> {
                         MaterialPageRoute(
                             builder: (_) => const LimitPage()),
                       );
-                      setState(() {});
+                      setState(() {
+                        _refresh();
+                      });
                     },
                     child: DataLimitCard(
                       usedMb: totalMonthMb,
@@ -100,13 +120,26 @@ class _HistoryPageState extends State<HistoryPage> {
 
               const SizedBox(height: 16),
 
+              // ================= CHART =================
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: DataUsageChart(data: chartData),
               ),
 
+              const SizedBox(height: 20),
+
+              // ================= APP USAGE LIST =================
+              const Text(
+                "Aplikasi Paling Boros Hari Ini",
+                style: TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 10),
+              const AppUsageList(),
+
               const SizedBox(height: 16),
 
+              // ================= LIST HISTORY =================
               Expanded(
                 child: ListView.builder(
                   itemCount: data.length,

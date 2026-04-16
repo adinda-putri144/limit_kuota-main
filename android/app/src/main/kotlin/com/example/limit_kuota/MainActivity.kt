@@ -1,86 +1,116 @@
 package com.example.limit_kuota
 
-import android.app.AppOpsManager
 import android.app.usage.NetworkStats
 import android.app.usage.NetworkStatsManager
 import android.content.Context
-import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
-import android.os.Build
-import android.os.Process
-import android.provider.Settings
-import android.telephony.TelephonyManager
+import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import java.util.Calendar
 
-class MainActivity : FlutterActivity() {
+class MainActivity: FlutterActivity() {
+
     private val CHANNEL = "limit_kuota/channel"
 
-    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+    override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
-            if (call.method == "getTodayUsage") {
-                if (!hasUsageStatsPermission()) {
-                    requestUsageStatsPermission()
-                    result.error("PERMISSION_DENIED", "Izin diperlukan", null)
-                } else {
-                    val wifi = getUsage(ConnectivityManager.TYPE_WIFI)
-                    val mobile = getUsage(ConnectivityManager.TYPE_MOBILE)
-                    
-                    // Kirim data dalam bentuk Map ke Flutter
-                    val data = mapOf(
-                        "wifi" to wifi,
-                        "mobile" to mobile
-                    )
-                    result.success(data)
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+            .setMethodCallHandler { call, result ->
+
+                when (call.method) {
+
+                    "getTodayUsage" -> {
+                        result.success(getTodayTotalUsage())
+                    }
+
+                    "getAppUsage" -> {
+                        result.success(getAppUsage())
+                    }
+
+                    else -> result.notImplemented()
                 }
-            } else {
-                result.notImplemented()
             }
-        }
     }
 
-    private fun hasUsageStatsPermission(): Boolean {
-        val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
-        } else {
-            appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
+    private fun getTodayTotalUsage(): Map<String, Long> {
+        val statsManager =
+            getSystemService(Context.NETWORK_STATS_SERVICE) as NetworkStatsManager
+
+        val endTime = System.currentTimeMillis()
+        val startTime = endTime - (24 * 60 * 60 * 1000)
+
+        var wifiBytes = 0L
+        var mobileBytes = 0L
+        val bucket = NetworkStats.Bucket()
+
+        val wifiStats = statsManager.querySummary(
+            ConnectivityManager.TYPE_WIFI, null, startTime, endTime
+        )
+        while (wifiStats.hasNextBucket()) {
+            wifiStats.getNextBucket(bucket)
+            wifiBytes += bucket.rxBytes + bucket.txBytes
         }
-        return mode == AppOpsManager.MODE_ALLOWED
+        wifiStats.close()
+
+        val mobileStats = statsManager.querySummary(
+            ConnectivityManager.TYPE_MOBILE, null, startTime, endTime
+        )
+        while (mobileStats.hasNextBucket()) {
+            mobileStats.getNextBucket(bucket)
+            mobileBytes += bucket.rxBytes + bucket.txBytes
+        }
+        mobileStats.close()
+
+        return mapOf("wifi" to wifiBytes, "mobile" to mobileBytes)
     }
 
-    private fun requestUsageStatsPermission() {
-        startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    }
+    // ⭐ FIX SAMSUNG — PER APLIKASI
+    private fun getAppUsage(): List<Map<String, Any>> {
+        val statsManager =
+            getSystemService(Context.NETWORK_STATS_SERVICE) as NetworkStatsManager
+        val pm = packageManager
 
-    private fun getUsage(networkType: Int): Long {
-        val networkStatsManager = getSystemService(Context.NETWORK_STATS_SERVICE) as NetworkStatsManager
-        val calendar = Calendar.getInstance()
-        calendar.set(Calendar.HOUR_OF_DAY, 0)
-        calendar.set(Calendar.MINUTE, 0)
-        calendar.set(Calendar.SECOND, 0)
-        calendar.set(Calendar.MILLISECOND, 0)
+        val startTime = System.currentTimeMillis() - (24 * 60 * 60 * 1000)
+        val endTime = System.currentTimeMillis()
 
-        val start = calendar.timeInMillis
-        val end = System.currentTimeMillis()
-        var total: Long = 0
+        val result = mutableListOf<Map<String, Any>>()
+        val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
 
-        try {
-            // Kita gunakan querySummary untuk iterasi semua bucket data
-            // null digunakan untuk SubscriberID agar mencakup semua SIM/WiFi
-            val stats = networkStatsManager.querySummary(networkType, null, start, end)
-            val bucket = NetworkStats.Bucket()
-            while (stats.hasNextBucket()) {
-                stats.getNextBucket(bucket)
-                total += bucket.rxBytes + bucket.txBytes
-            }
-            stats.close()
-        } catch (e: Exception) {
-            e.printStackTrace()
+        for (app in apps) {
+            try {
+                val uid = app.uid
+                var totalBytes = 0L
+                val bucket = NetworkStats.Bucket()
+
+                val mobileStats = statsManager.queryDetailsForUid(
+                    ConnectivityManager.TYPE_MOBILE, null, startTime, endTime, uid
+                )
+                while (mobileStats.hasNextBucket()) {
+                    mobileStats.getNextBucket(bucket)
+                    totalBytes += bucket.rxBytes + bucket.txBytes
+                }
+                mobileStats.close()
+
+                val wifiStats = statsManager.queryDetailsForUid(
+                    ConnectivityManager.TYPE_WIFI, null, startTime, endTime, uid
+                )
+                while (wifiStats.hasNextBucket()) {
+                    wifiStats.getNextBucket(bucket)
+                    totalBytes += bucket.rxBytes + bucket.txBytes
+                }
+                wifiStats.close()
+
+                if (totalBytes > 5 * 1024 * 1024) {
+                    val appName = pm.getApplicationLabel(app).toString()
+                    result.add(mapOf("appName" to appName, "bytes" to totalBytes))
+                }
+
+            } catch (_: Exception) {}
         }
-        return total
+
+        return result.sortedByDescending { it["bytes"] as Long }.take(10)
     }
 }
