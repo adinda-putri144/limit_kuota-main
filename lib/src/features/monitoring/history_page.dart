@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:limit_kuota/src/core/data/database_helper.dart';
 import 'models/data_usage_model.dart';
 import 'widgets/data_usage_chart.dart';
 import 'widgets/data_limit_card.dart';
-import 'widgets/app_usage_list.dart';
 import 'limit_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -15,12 +15,45 @@ class HistoryPage extends StatefulWidget {
 }
 
 class _HistoryPageState extends State<HistoryPage> {
+  static const platform = MethodChannel('limit_kuota/channel');
+
   late Future<List<Map<String, dynamic>>> _historyList;
+  late Future<List<dynamic>> _appUsageFuture;
 
   @override
   void initState() {
     super.initState();
-    _historyList = DatabaseHelper.instance.getHistory();
+    _initPage();
+  }
+
+  // ===== INI YANG SEBELUMNYA HILANG =====
+  Future<void> _saveTodayUsageToDb() async {
+    final result = await platform.invokeMethod('getTodayUsage');
+
+    String today =
+        "${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}";
+
+    int wifi = result['wifi'] ?? 0;
+    int mobile = result['mobile'] ?? 0;
+
+    await DatabaseHelper.instance.insertOrUpdate(today, wifi, mobile);
+  }
+
+  Future<void> _initPage() async {
+    await _saveTodayUsageToDb(); // WAJIB JALAN DULU
+    _reload();
+  }
+
+  Future<void> _reload() async {
+    setState(() {
+      _historyList = DatabaseHelper.instance.getHistory();
+      _appUsageFuture = _getAppUsage();
+    });
+  }
+
+  Future<List<dynamic>> _getAppUsage() async {
+    final result = await platform.invokeMethod('getAppUsage');
+    return result;
   }
 
   Future<double> _getLimit() async {
@@ -32,6 +65,11 @@ class _HistoryPageState extends State<HistoryPage> {
     double mb = bytes / (1024 * 1024);
     if (mb > 1024) return "${(mb / 1024).toStringAsFixed(2)} GB";
     return "${mb.toStringAsFixed(2)} MB";
+  }
+
+  String _formatAppBytes(int bytes) {
+    double mb = bytes / (1024 * 1024);
+    return "${mb.toStringAsFixed(1)} MB";
   }
 
   @override
@@ -50,7 +88,6 @@ class _HistoryPageState extends State<HistoryPage> {
             data.sort((a, b) =>
                 DateTime.parse(a['date']).compareTo(DateTime.parse(b['date'])));
 
-            // ===== Hitung total bulan ini =====
             final now = DateTime.now();
             double totalMonthMb = 0;
 
@@ -63,7 +100,6 @@ class _HistoryPageState extends State<HistoryPage> {
               }
             }
 
-            // ===== Chart 7 hari =====
             final last7Days =
                 data.reversed.take(7).toList().reversed.toList();
 
@@ -84,13 +120,12 @@ class _HistoryPageState extends State<HistoryPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ===== HEADER =====
                   Container(
                     padding: const EdgeInsets.all(20),
                     decoration: const BoxDecoration(
                       color: Colors.blue,
-                      borderRadius: BorderRadius.vertical(
-                          bottom: Radius.circular(30)),
+                      borderRadius:
+                          BorderRadius.vertical(bottom: Radius.circular(30)),
                     ),
                     child: const Text(
                       "Monitoring Kuota Internet",
@@ -103,7 +138,6 @@ class _HistoryPageState extends State<HistoryPage> {
 
                   const SizedBox(height: 20),
 
-                  // ===== LIMIT CARD =====
                   FutureBuilder<double>(
                     future: _getLimit(),
                     builder: (context, limitSnap) {
@@ -129,7 +163,6 @@ class _HistoryPageState extends State<HistoryPage> {
 
                   const SizedBox(height: 20),
 
-                  // ===== CHART CARD =====
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Card(
@@ -141,39 +174,77 @@ class _HistoryPageState extends State<HistoryPage> {
                       ),
                     ),
                   ),
+const SizedBox(height: 20),
 
+// ===== TOP APLIKASI BOROS =====
+const Padding(
+  padding: EdgeInsets.symmetric(horizontal: 20),
+  child: Text(
+    "Top Aplikasi Paling Boros",
+    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+  ),
+),
+const SizedBox(height: 10),
+
+FutureBuilder<List<dynamic>>(
+  future: _appUsageFuture,
+  builder: (context, snap) {
+    if (!snap.hasData) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final apps = snap.data!;
+    if (apps.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(16),
+        child: Text("Tidak ada data aplikasi"),
+      );
+    }
+
+    int maxBytes = apps.first['bytes'];
+
+    return ListView.builder(
+      itemCount: apps.length,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemBuilder: (context, index) {
+        final app = apps[index];
+        double percent = app['bytes'] / maxBytes;
+
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(15)),
+          child: ListTile(
+            leading: CircleAvatar(
+              child: Text("#${index + 1}"),
+            ),
+            title: Text(app['appName']),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_formatAppBytes(app['bytes'])),
+                const SizedBox(height: 6),
+                LinearProgressIndicator(value: percent),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  },
+),
                   const SizedBox(height: 20),
 
-                  // ===== TOP APPS =====
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 20),
-                    child: Text(
-                      "Top Aplikasi Paling Boros",
-                      style: TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16),
-                    child: AppUsageList(),
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  // ===== HISTORY TITLE =====
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 20),
                     child: Text(
                       "Riwayat Harian",
-                      style: TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.bold),
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                     ),
                   ),
 
-                  const SizedBox(height: 10),
-
-                  // ===== HISTORY LIST =====
                   ListView.builder(
                     itemCount: data.length,
                     shrinkWrap: true,

@@ -20,36 +20,35 @@ class _NetworkState extends State<Network> {
   String wifiUsage = "0.00 MB";
   String mobileUsage = "0.00 MB";
 
-  Future<void> fetchUsage() async {
-    try {
-      final Map<dynamic, dynamic> result =
-          await platform.invokeMethod('getTodayUsage');
+ Future<void> fetchUsage() async {
+  try {
+    final Map<dynamic, dynamic> result =
+        await platform.invokeMethod('getTodayUsage');
 
-      String todayDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    String todayDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
 
-      int wifiBytes = result['wifi'] ?? 0;
-      int mobileBytes = result['mobile'] ?? 0;
+    int wifiBytes = result['wifi'] ?? 0;
+    int mobileBytes = result['mobile'] ?? 0;
 
-      await DatabaseHelper.instance.insertOrUpdate(
-        todayDate,
-        wifiBytes,
-        mobileBytes,
-      );
+    // WAJIB ADA INI (menyimpan ke database)
+    await DatabaseHelper.instance.insertOrUpdate(
+      todayDate,
+      wifiBytes,
+      mobileBytes,
+    );
 
-      setState(() {
-        wifiUsage = _formatBytes(wifiBytes);
-        mobileUsage = _formatBytes(mobileBytes);
-      });
+    setState(() {
+      wifiUsage = _formatBytes(wifiBytes);
+      mobileUsage = _formatBytes(mobileBytes);
+    });
 
-      // Cek limit kuota setelah update
-      checkLimitAndWarn(wifiBytes + mobileBytes);
-    } on PlatformException catch (e) {
-      if (e.code == "PERMISSION_DENIED") {
-        _showPermissionDialog();
-      }
+    checkLimitAndWarn(wifiBytes + mobileBytes);
+  } on PlatformException catch (e) {
+    if (e.code == "PERMISSION_DENIED") {
+      _showPermissionDialog();
     }
   }
-
+}
   String _formatBytes(int bytes) {
     if (bytes <= 0) return "0.00 MB";
     double mb = bytes / (1024 * 1024);
@@ -72,10 +71,10 @@ class _NetworkState extends State<Network> {
             "Silakan aktifkan 'Set Data Limit' di pengaturan sistem agar koneksi terputus otomatis.",
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Nanti"),
-            ),
+            // TextButton(
+            //   onPressed: () => Navigator.pop(context),
+            //   child: const Text("Nanti"),
+            // ),
             ElevatedButton(
               onPressed: () {
                 Navigator.pop(context);
@@ -89,12 +88,15 @@ class _NetworkState extends State<Network> {
     }
   }
 
-  @override
-  void initState() {
-    super.initState();
-    fetchUsage();
-  }
+@override
+void initState() {
+  super.initState();
+  _initAutoCollect();
+}
 
+Future<void> _initAutoCollect() async {
+  await fetchUsage();
+}
   @override
   Widget build(BuildContext context) {
     return Scaffold(
